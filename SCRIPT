@@ -1,0 +1,335 @@
+# INSTALAR ESTAS LIBRERIAS
+install.packages("tidyverse")
+# VERIFICAR SI SE TIENE ESTAS LIBRERIAS
+library(tidyverse)
+library(ggplot2)
+# SUBIR TU ARCHIVO
+print(datos_ventas)
+# CAMBIAR TU ARCHIVO Y ALMACENARLO EN ESTA VARIABLE
+ventas_df<-datos_ventas
+
+Sys.setlocale("LC_TIME", "es_ES.UTF-8") # ESCENCIAL PARA QUE SE CAMBIE EL IDIOMA Y EL FORMATO DE FECHA DE TU PAIS
+
+print(ventas_df)
+
+##################################################
+LIMPIEZA
+##################################
+ventas_limpio <- ventas_df %>%
+  # 2.1 Limpieza y Conversión de Tipos
+  # Asegurar que 'Fecha' es de tipo Date y forzar columnas de texto a factor/caracter
+  mutate(
+    Fecha = as.Date(Fecha, format = "%Y-%m-%d"),
+    Producto = as.character(Producto),
+    Local = as.factor(Local)
+  ) %>%
+  
+  # 2.2 Manejo de Valores Nulos (NA)
+  # Remplazamos NA's en columnas numéricas (Cantidad, Precio_Unitario, Total_Venta)
+  # con 0 o la mediana/media. Aquí usaremos 0, asumiendo que un NA en ventas significa 
+  # una transacción incompleta o un valor no registrado, que puede tratarse como 0 para este análisis.
+  # El enfoque ideal dependería del contexto de negocio, pero 0 es un enfoque conservador.
+  replace_na(list(Cantidad = 0, Precio_Unitario = 0, Total_Venta = 0)) %>%
+  
+  # 2.3 Creación de Columnas de Tiempo (Feature Engineering)
+  # Extraer componentes de tiempo para el análisis.
+  mutate(
+    Año = lubridate::year(Fecha),
+    Mes = lubridate::month(Fecha, label = TRUE, abbr = FALSE), # Nombre completo del mes
+    Dia_Semana = lubridate::wday(Fecha, label = TRUE, abbr = FALSE) # Nombre completo del día de la semana
+  ) %>%
+  
+  # 2.4 Filtrar/Validar datos
+  # Asegurar que solo se consideran ventas positivas.
+  filter(Total_Venta > 0, Cantidad > 0)
+
+# Verificación de la limpieza y transformación
+print(glimpse(ventas_limpio))
+
+## -----------------------------------------------------------
+## 3. Análisis Descriptivo (Cumpliendo Objetivos de Negocio)
+## -----------------------------------------------------------
+
+### Objetivo 1: Ventas totales y cantidad total vendida por año
+analisis_anual <- ventas_limpio %>%
+  group_by(Año) %>%
+  summarise(
+    Ventas_Totales_Anual = sum(Total_Venta, na.rm = TRUE),
+    Cantidad_Total_Anual = sum(Cantidad, na.rm = TRUE),
+    .groups = 'drop'
+  )
+print("--- Ventas y Cantidad Total por Año ---")
+print(analisis_anual)
+
+### Objetivo 2: Identificar los 5 productos más vendidos por ingresos
+top_5_productos_ingresos <- ventas_limpio %>%
+  group_by(Producto) %>%
+  summarise(
+    Ingresos_Totales = sum(Total_Venta, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(Ingresos_Totales)) %>%
+  slice_head(n = 5) # Seleccionar los 5 primeros
+print("--- Top 5 Productos por Ingresos ---")
+print(top_5_productos_ingresos)
+
+#======================
+# Ventas por mes
+analisis_mensual <- ventas_limpio %>%
+  group_by(Mes) %>%
+  summarise(
+    Ventas_Totales_mensual = sum(Total_Venta, na.rm = TRUE),
+    Cantidad_Total_mensual = sum(Cantidad, na.rm = TRUE),
+    .groups = 'drop'
+  )
+print("--- Ventas y Cantidad Total por Año ---")
+print(analisis_mensual)
+
+### Objetivo 3: Analizar las ventas promedio por Local
+ventas_promedio_local <- ventas_limpio %>%
+  group_by(Local) %>%
+  summarise(
+    Venta_Promedio_Por_Ticket = mean(Total_Venta, na.rm = TRUE),
+    Total_Ventas = sum(Total_Venta, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(Venta_Promedio_Por_Ticket))
+print("--- Ventas Promedio y Total por Local ---")
+print(ventas_promedio_local)
+
+## 5. Análisis Detallado: Venta de Productos por Local y por Mes
+## -----------------------------------------------------------
+
+### Objetivo: Agregación de Ventas por Local, Mes y Producto
+# Agrupamos los datos para obtener los ingresos totales por cada combinación única.
+ventas_local_mes_producto <- ventas_limpio %>%
+  group_by(Local, Mes, Producto) %>%
+  summarise(
+    Ingresos_Mensuales_Producto = sum(Total_Venta, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  # Aseguramos que 'Mes' sea un factor ordenado correctamente para la visualización
+  # (Esto ya debería estar hecho si se usó el script anterior, pero es buena práctica)
+  mutate(Mes = factor(Mes, levels = unique(ventas_limpio$Mes)[order(match(unique(ventas_limpio$Mes), 
+                                                                          levels(ventas_limpio$Mes)))]))
+
+print("--- Ingresos Totales por Local, Mes y Producto (Primeras 10 filas) ---")
+print(head(ventas_local_mes_producto, 10))
+
+# -----------------------------------------------------------
+# Visualización: Gráfico de Barras Agrupado y Facetado
+# -----------------------------------------------------------
+
+# Usaremos un gráfico de barras facetado por 'Local' o 'Mes'. 
+# Facetar por Local y usar Mes y Producto en los ejes es la forma más clara.
+
+grafico_local_mes_producto <- ventas_local_mes_producto %>%
+  # Excluir productos con ventas muy bajas para no saturar el gráfico
+  filter(Ingresos_Mensuales_Producto > 0) %>% 
+  
+  ggplot(aes(x = Mes, y = Ingresos_Mensuales_Producto, fill = Producto)) +
+  
+  # Usar geom_col para barras, position="stack" para apilar las ventas de productos
+  # dentro de cada mes, o position="dodge" si quieres compararlas lado a lado (Stack es mejor aquí).
+  geom_col(position = "stack", color = "white") +
+  
+  # Facetar (separar) por el Local, haciendo un gráfico por cada sucursal.
+  facet_wrap(~ Local, scales = "free_y", ncol = 1) + 
+  
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "📊 Ingresos por Producto, Desglosados por Mes y Local",
+    x = "Mes",
+    y = "Ingresos Totales (Soles/Unidades)",
+    fill = "Producto Vendido",
+    caption = "El gráfico muestra la composición de las ventas mensuales en cada sucursal."
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+print(grafico_local_mes_producto)
+#
+### Gráfico 1: Ventas totales por Local (Gráfico de barras)
+# Identificar qué local genera más ingresos.
+grafico_local <- ventas_promedio_local %>%
+  ggplot(aes(x = reorder(Local, Total_Ventas), y = Total_Ventas)) +
+  geom_col(fill = "darkred") +
+  geom_text(aes(label = scales::comma(Total_Ventas, accuracy = 1)), 
+            vjust = -0.5, size = 3) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "📊 Ventas Totales por Local",
+    x = "Local",
+    y = "Total de Ventas (Soles/Unidades)",
+    caption = "Datos de Ventas Anuales de Pollería"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(grafico_local)
+#
+
+### Gráfico 2: Tendencia de ventas diaria a lo largo del año (Línea de tiempo)
+# Agregamos las ventas a nivel diario para suavizar el gráfico de línea.
+ventas_diarias <- ventas_limpio %>%
+  group_by(Fecha) %>%
+  summarise(Venta_Total_Diaria = sum(Total_Venta, na.rm = TRUE), .groups = 'drop')
+
+grafico_tendencia <- ventas_diarias %>%
+  ggplot(aes(x = Fecha, y = Venta_Total_Diaria)) +
+  # Usamos geom_line para mostrar la tendencia a lo largo del tiempo.
+  geom_line(color = "steelblue", alpha = 0.8) + 
+  # Agregamos un promedio móvil (e.g., 7 días) para suavizar la tendencia.
+  geom_smooth(method = "loess", se = FALSE, color = "red", linetype = "dashed") + 
+  labs(
+    title = "📈 Tendencia Diaria de Ventas (con Suavizado)",
+    x = "Fecha",
+    y = "Venta Total Diaria",
+    caption = "Línea roja discontinua: Tendencia suavizada (LOESS)"
+  ) +
+  theme_sub_panel()
+print(grafico_tendencia)
+#
+
+### Gráfico 3: Distribución de las ventas por Día de la Semana (Gráfico de violín)
+# Esto ayuda a identificar los días más rentables y la variabilidad.
+# Reordenamos los días de la semana para una mejor lectura (Lunes a Domingo).
+orden_dias <- c("domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado")
+
+grafico_dia_semana <- ventas_limpio %>%
+  # Asegurar el orden correcto de los días
+  mutate(Dia_Semana = factor(Dia_Semana, levels = orden_dias)) %>%
+  ggplot(aes(x = Dia_Semana, y = Total_Venta, fill = Dia_Semana)) +
+  # Usamos geom_violin para ver la distribución de los montos de venta.
+  geom_violin(trim = TRUE, alpha = 0.6) +
+  # Agregamos geom_boxplot para ver la mediana (línea central) y cuartiles.
+  geom_boxplot(width = 0.1, outlier.colour = "red") + 
+  labs(
+    title = "💸 Distribución de Montos de Venta por Día de la Semana",
+    x = "Día de la Semana",
+    y = "Total de Venta por Transacción",
+    caption = "La mediana (línea central) indica el valor de venta típico."
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+print(grafico_dia_semana)
+#
+
+# 2. Identificación del Producto Más Vendido (por Monto)
+# Agrupamos por Local y Mes, y luego usamos slice_max() para seleccionar
+# la fila (producto) con el mayor Monto_Total.
+
+producto_mas_vendido_mensual <- ventas_limpio %>%
+  group_by(Local, Mes) %>%
+  # Selecciona la fila que tiene el valor más alto en 'Total_Venta'.
+  # El argumento 'with_ties = FALSE' asegura que si hay empates, solo se selecciona uno (el primero).
+  slice_max(order_by = Total_Venta, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  # Renombrar para mayor claridad en el resultado final
+  rename(
+    Producto_TOP = Producto,
+    Monto_TOP = Total_Venta,
+    Cantidad_TOP = Cantidad
+  ) %>%
+  # Reordenar las columnas para una mejor presentación
+  select(Local, Mes, Producto_TOP, Monto_TOP, Cantidad_TOP) %>%
+  
+  # Asegurar el orden correcto de los meses para la visualización
+  mutate(Mes = factor(Mes, levels = levels(ventas_limpio$Mes)))
+
+print("--- Producto TOP por Monto, por Mes y Local (Primeras 15 filas) ---")
+print(head(producto_mas_vendido_mensual, 15))
+
+# -----------------------------------------------------------
+# Visualización: Monto del Producto TOP a lo largo del año por Local
+# -----------------------------------------------------------
+
+grafico_top_producto_monto <- producto_mas_vendido_mensual %>%
+  ggplot(aes(x = Mes, y = Monto_TOP, fill = Local)) +
+  
+  # Gráfico de barras simple para el monto
+  geom_col(position = position_dodge(width = 0.9), color = "gray50") +
+  
+  # Etiquetas para identificar el producto TOP sobre la barra
+  geom_text(aes(label = Producto_TOP), 
+            vjust = -0.5, 
+            position = position_dodge(width = 0.9), 
+            size = 2.5, 
+            angle = 45,
+            check_overlap = TRUE) +
+  
+  labs(
+    title = "💰 Monto de Venta del Producto más Vendido (TOP 1) por Mes y Local",
+    subtitle = "El texto sobre la barra indica el Producto que fue TOP en ese mes/local.",
+    x = "Mes",
+    y = "Monto de Venta TOP (Soles)",
+    fill = "Local"
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8))
+
+print(grafico_top_producto_monto)
+#
+
+
+## -----------------------------------------------------------
+## 7. Visualización Detallada: Producto TOP por Local (GRÁFICOS GUARDADOS)
+## -----------------------------------------------------------
+
+# Asegúrate de que el directorio donde se guardarán los archivos exista
+if (!dir.exists("graficos_ventas_top")) {
+  dir.create("graficos_ventas_top")
+}
+
+locales_analizar <- unique(producto_mas_vendido_mensual$Local)
+
+for (local_actual in locales_analizar) {
+  
+  datos_local <- producto_mas_vendido_mensual %>%
+    filter(Local == local_actual)
+  
+  # Generar el objeto gráfico
+  grafico_local_individual <- datos_local %>%
+    ggplot(aes(x = Mes, y = Monto_TOP)) +
+    
+    geom_col(fill = "darkblue", alpha = 0.7) +
+    
+    geom_text(aes(label = paste0(Producto_TOP, "\n(", scales::comma(Monto_TOP, accuracy = 1), ")")), 
+              vjust = -0.3, 
+              size = 3, 
+              angle = 0,
+              check_overlap = TRUE) +
+    
+    labs(
+      title = paste("💰 Producto TOP por Monto Mensual en el Local:", local_actual),
+      subtitle = "Monto (Y) y nombre del producto más vendido por ingresos.",
+      x = "Mes",
+      y = "Monto de Venta TOP (Soles)"
+    ) +
+    scale_y_continuous(labels = scales::comma, limits = c(0, max(datos_local$Monto_TOP) * 1.2)) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+      plot.title = element_text(face = "bold")
+    )
+  
+  # *** NUEVA LÍNEA CLAVE: Guardar el gráfico en un archivo PNG ***
+  nombre_archivo <- paste0("graficos_ventas_top/Top_Producto_", gsub(" ", "_", local_actual), ".png")
+  
+  # Utilizamos ggsave para guardar el último gráfico creado
+  ggsave(
+    filename = nombre_archivo, 
+    plot = grafico_local_individual, # Especificamos el objeto a guardar
+    width = 10, 
+    height = 6, 
+    units = "in"
+  )
+  
+  message(paste("Gráfico para", local_actual, "guardado en:", nombre_archivo))
+  
+  cat("\n---\n") 
+}
